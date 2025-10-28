@@ -4,15 +4,27 @@ This repository documents my journey learning Microsoft SQL Server, from install
 
 ## Table of Contents
 
-- [Introduction](#introduction)
-- [Prerequisites and Setup](#prerequisites-and-setup)
-- [Topics](#topics)
-  - [Basics](#basics)
-    - [Creating Your First Database](#creating-your-first-database)
-- [How to Use This Repo](#how-to-use-this-repo)
-- [Contributing](#contributing)
-- [License](#license)
-
+- **Introduction**
+- **Prerequisites and Setup**
+- **Basics**
+- **Intermediate**
+  - Joins & Relationships
+  - Window Functions
+  - NULL Handling and Safety
+- **Advanced**
+  - CTEs (Common Table Expressions)
+  - Views
+  - Tables: Permanent vs Temporary
+  - Database Automation: Triggers
+  - Stored Procedures: Reusable Logic
+  - Performance Tuning: Indexes & Storage
+  - Scalability: Table Partitioning
+  - Advanced Queries: Subqueries & Metadata
+- **SQL Performance Mastery: 30 Golden Tips**
+- **How to Use This Repo**
+- **Contributing**
+- **License**
+  
 ## Introduction
 Welcome to my MSSQL learning repository! Here, I'll be sharing notes, SQL scripts, and resources as I progress through various topics in Microsoft SQL Server. The goal is to make database concepts **accessible and practical** for beginners.
 
