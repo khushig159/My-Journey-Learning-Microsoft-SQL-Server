@@ -1528,6 +1528,1199 @@ END
 ```
 
 ## Stored Procedures: Reusable Logic
+>A **Stored Procedure** is a **pre-compiled, reusable batch of T-SQL code** stored in the database.  
+> It can accept **input parameters**, return **results**, and perform **complex operations**.
+> Think of it as a **function** in programming — call it with inputs, get outputs.
+
+```sql
+CREATE PROCEDURE [schema.]procedure_name
+    @parameter1 datatype = default_value,
+    @parameter2 datatype OUTPUT
+AS
+BEGIN
+    -- Your logic here
+END
+```
+-CREATE PROCEDURE → define
+-ALTER PROCEDURE → modify
+-DROP PROCEDURE IF EXISTS → safe delete
+-EXEC procedure_name @param = value
+
+### Why Use Stored Procedures?
+| Use Case | Solved by Procedure |
+|-----------|---------------------|
+| Repeated complex logic | Save once, reuse |
+| Security | Grant EXEC only |
+| Performance | Pre-compiled plan |
+| Encapsulation | Hide implementation |
+| Maintenance | Change in one place |
+
+### Advantages & Disadvantages
+| Advantages | Disadvantages |
+|------------|--------------|
+| Reusable & centralized | Harder to version control |
+| Faster execution (cached plan) | Debugging is tricky |
+| Reduced network traffic | Vendor lock-in |
+| Security via EXEC permissions | Overuse hurts clarity |
+
+### Parameters: Input & Output
+```sql
+@Country NVARCHAR(50) = 'USA'  -- Input with default
+@TotalSales DECIMAL(18,2) OUTPUT  -- Output parameter
+```
+@ → parameter prefix.
+= default → optional.
+OUTPUT → returns value to caller.
+
+### Variables: Local Storage
+```sql
+DECLARE @TotalCustomers INT;
+SET @TotalCustomers = 100;
+```
+@ → variable.
+DECLARE → create.
+SET or SELECT → assign.
+
+### Control Flow: IF...ELSE
+```sql
+IF EXISTS (SELECT 1 FROM ...)
+BEGIN
+    -- Do something
+END
+ELSE
+BEGIN
+    -- Do else
+END
+```
+### Error Handling: TRY...CATCH
+```sql
+BEGIN TRY
+    -- Risky code
+END TRY
+BEGIN CATCH
+    PRINT ERROR_MESSAGE();
+END CATCH
+```
+### Best Practices
+| Practice | Why |
+|-----------|-----|
+| Use schema (e.g., Sales.) | Organize |
+| SET NOCOUNT ON | Avoid "n rows affected" |
+| DROP PROC IF EXISTS | Safe re-creation |
+| Use TRY...CATCH | Graceful errors |
+| Validate inputs | Prevent bad data |
+
+### Full Example: Dynamic Customer Report
+```sql
+DROP PROCEDURE IF EXISTS Sales.GetCustomerSummary;
+GO
+
+CREATE PROCEDURE Sales.GetCustomerSummary 
+    @Country NVARCHAR(50) = 'USA'
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    BEGIN TRY
+        DECLARE @TotalCustomers INT;
+        DECLARE @AvgScore FLOAT;
+
+        -- Step 1: Clean NULL scores
+        IF EXISTS (SELECT 1 FROM Sales.Customers WHERE Score IS NULL AND Country = @Country)
+        BEGIN
+            PRINT 'Updating NULL scores to 0 for ' + @Country;
+            UPDATE Sales.Customers
+            SET Score = 0
+            WHERE Score IS NULL AND Country = @Country;
+        END
+        ELSE
+        BEGIN
+            PRINT 'No NULL scores found.';
+        END
+
+        -- Step 2: Calculate summary
+        SELECT 
+            @TotalCustomers = COUNT(*),
+            @AvgScore = AVG(Score)
+        FROM Sales.Customers
+        WHERE Country = @Country;
+
+        -- Step 3: Print summary
+        PRINT 'Total Customers from ' + @Country + ': ' + CAST(@TotalCustomers AS NVARCHAR(10));
+        PRINT 'Average Score from ' + @Country + ': ' + CAST(@AvgScore AS NVARCHAR(20));
+
+        -- Step 4: Orders report (with intentional error for demo)
+        SELECT
+            COUNT(o.OrderID) AS TotalOrders,
+            SUM(o.Sales) AS TotalSales
+            -- 1/0  -- Uncomment to trigger error
+        FROM Sales.Orders o
+        INNER JOIN Sales.Customers c ON c.CustomerID = o.CustomerID
+        WHERE c.Country = @Country;
+
+    END TRY
+    BEGIN CATCH
+        PRINT 'AN ERROR OCCURRED!';
+        PRINT 'ERROR MESSAGE: ' + ERROR_MESSAGE();
+        PRINT 'ERROR NUMBER: ' + CAST(ERROR_NUMBER() AS NVARCHAR(10));
+        PRINT 'ERROR LINE: ' + CAST(ERROR_LINE() AS NVARCHAR(10));
+        PRINT 'ERROR PROCEDURE: ' + ISNULL(ERROR_PROCEDURE(), 'N/A');
+    END CATCH
+END
+GO
+```
+### Execute the procedure
+```sql
+-- Default: USA
+EXEC Sales.GetCustomerSummary;
+
+-- Germany
+EXEC Sales.GetCustomerSummary @Country = 'Germany';
+```
+
+## Performance Tuning: Indexes & Storage
+> An **index** is a **database structure** that improves the **speed of data retrieval** operations on a table at the cost of **additional storage** and **slower writes**.
+> Think of it like the **index in a book** — helps you find pages quickly without scanning everything.
+
+#### HEAP vs CLUSTERED vs NONCLUSTERED
+
+| Structure | Data Order | Max per Table | Storage |
+|---------|------------|---------------|--------|
+| **HEAP** | No order | N/A | Just data |
+| **CLUSTERED** | **Physical order** | **1 only** | Data + index |
+| **NONCLUSTERED** | Separate | Up to 999 | Pointers to data |
+
+## CLUSTERED INDEX — Physical Order
+> A **Clustered Index** determines the **physical order** of data in the table.
+
+- Data rows are **stored in sorted order** based on the index key.
+- The **table = the index** (data pages are index pages).
+- **Only one** allowed per table.
+- Usually on **Primary Key** (by default).
+
+```sql
+CREATE CLUSTERED INDEX idx_DBCustomers_CustomerID
+ON Sales.DBCustomers (CustomerID)
+```
+**Before** : CustomerID: 5, 1, 8, 3
+**After** : CustomerID: 1, 3, 5, 8  ← Physically reordered!
+
+### Advantages & Disadvantages
+| Advantages | Disadvantages |
+|------------|--------------|
+| Fast range scans (BETWEEN, >, <) | Slow inserts (page splits) |
+| Fast ordered retrieval | Only one per table |
+| No extra lookup | Rebuild on key changes |
+| Ideal for PK lookups | Fragmentation over time |
+
+### When to Use
+| Scenario | Use Clustered Index |
+|----------|---------------------|
+| Primary Key (unique, sequential) | Yes |
+| Frequent ORDER BY column | Yes |
+| Range queries (Date BETWEEN ...) | Yes |
+| Foreign key columns (joins) | Consider |
+
+## NONCLUSTERED INDEX — Pointers
+>A Nonclustered Index is a separate structure containing sorted key values + pointers to actual data.
+>Like a phone book: Name → Page number.
+>Data remains in original order (heap or clustered).
+>Up to 999 per table.
+
+```sql
+CREATE NONCLUSTERED INDEX idx_DBCustomers_LastName
+ON Sales.DBCustomers (LastName);
+```
+```text
+Index: Brown → RowID 5
+       Smith  → RowID 1
+```
+### Advantages & Disadvantages
+| Advantages | Disadvantages |
+|------------|--------------|
+| Multiple per table | Extra storage |
+| Fast exact match (WHERE LastName = 'Brown') | Two lookups (index → data) |
+| Can include columns (INCLUDE) | Slower writes |
+| Great for foreign keys, filters | |
+
+### When to Use
+| Scenario | Use Non-Clustered Index |
+|----------|-------------------------|
+| Frequent WHERE filters | Yes |
+| JOIN columns | Yes |
+| GROUP BY, ORDER BY | Yes |
+| Covering queries (INCLUDE) | Yes |
+
+## COLUMNSTORE INDEX — Analytics Power
+
+**Rowstore vs Columnstore**
+| Storage | Layout | Best For |
+|---------|--------|----------|
+| Rowstore | Entire row together | OLTP (transactions) |
+| Columnstore | One column together | OLAP (analytics) |
+
+```text
+Rowstore:     [ID:1, Name:John, Sales:100]
+              [ID:2, Name:Jane, Sales:200]
+
+Columnstore:  ID:   [1, 2]
+              Name: [John, Jane]
+              Sales:[100, 200]  ← Compressed!
+```
+
+### Clustered vs Nonclustered Columnstore
+| Type | Description |
+|------|-------------|
+| Clustered Columnstore | Replaces all rowstore data — entire table |
+| Nonclustered Columnstore | Add-on index — for specific queries |
+
+```sql
+-- Full analytics table
+CREATE CLUSTERED COLUMNSTORE INDEX idx_FactInternetSales_CS_PK
+ON FactInternetSales_CS;
+
+-- Hybrid: keep rowstore + add analytics
+CREATE NONCLUSTERED COLUMNSTORE INDEX idx_DBCustomers_CS_FirstName
+ON Sales.DBCustomers (FirstName);
+```
+### Practical Examples
+```sql
+-- 1. Copy data
+SELECT * INTO Sales.DBCustomers FROM Sales.Customers;
+
+-- 2. Add Clustered Index (PK-like)
+CREATE CLUSTERED INDEX idx_DBCustomers_CustomerID
+ON Sales.DBCustomers (CustomerID);
+
+-- 3. Add Nonclustered for filtering
+CREATE NONCLUSTERED INDEX idx_DBCustomers_CountryScore
+ON Sales.DBCustomers (Country, Score);
+
+-- 4. Query uses index!
+SELECT * FROM Sales.DBCustomers 
+WHERE Country = 'USA' AND Score > 50;
+```
+### Index Management
+```sql
+-- Drop index
+DROP INDEX idx_DBCustomers_CustomerID ON Sales.DBCustomers;
+
+-- Rebuild fragmented index
+ALTER INDEX idx_DBCustomers_CountryScore ON Sales.DBCustomers REBUILD;
+
+-- View index usage
+SELECT * FROM sys.dm_db_index_usage_stats 
+WHERE object_id = OBJECT_ID('Sales.DBCustomers');
+```
+
+### Best Practices & Myths
+| Do | Don't |
+|----|-------|
+| Index PK with clustered | Over-index (999 nonclustered = bad) |
+| Index foreign keys | Index every column |
+| Use INCLUDE for covering | Forget to rebuild after bulk load |
+| Monitor sys.dm_db_index_usage_stats | Believe "indexes always help" |
+
+```sql
+-- Covering index (avoid lookup)
+CREATE NONCLUSTERED INDEX idx_Covering
+ON Sales.DBCustomers (Country)
+INCLUDE (FirstName, LastName, Score);
+```
+#### UNIQUE & FILTERED Indexes
+
+##### UNIQUE Index — Enforce Uniqueness
+
+```sql
+CREATE UNIQUE NONCLUSTERED INDEX idx_Products_Product
+ON Sales.Products (Product);
+```
+#### What Happens?
+```sql
+INSERT INTO Sales.Products (ProductID, Product) VALUES (106, 'Caps');
+-- ERROR: Violation of UNIQUE KEY constraint
+```
+### Explanation:
+Prevents duplicate values in Product column.
+Can be clustered or nonclustered.
+Automatically created on PRIMARY KEY.
+
+### FILTERED Index — Index Only Specific Rows
+```sql
+CREATE NONCLUSTERED INDEX idx_Customers_USA
+ON Sales.Customers (Country)
+WHERE Country = 'USA';
+```
+
+**Benefits**:
+Smaller index → faster
+Only indexes USA customers
+Ideal for sparse data (e.g., Status = 'Active')
+
+### Index Management & Monitoring
+
+**Monitor Index Usage (DMV)**
+```sql
+SELECT 
+    tbl.name AS TableName,
+    idx.name AS IndexName,
+    idx.type_desc AS IndexType,
+    idx.is_primary_key,
+    idx.is_unique,
+    s.user_seeks,
+    s.user_scans,
+    s.user_lookups,
+    s.user_updates,
+    COALESCE(s.last_user_seek, s.last_user_scan, s.last_user_lookup) AS LastUsed
+FROM sys.indexes idx
+JOIN sys.tables tbl ON idx.object_id = tbl.object_id
+LEFT JOIN sys.dm_db_index_usage_stats s 
+    ON s.object_id = idx.object_id AND s.index_id = idx.index_id
+WHERE s.database_id = DB_ID()
+ORDER BY tbl.name, idx.name;
+```
+**Key Columns:**
+-user_seeks → used in WHERE, JOIN
+-user_scans → full scan (bad for large tables)
+-user_updates → cost of writes
+-LastUsed → when was it helpful?
+
+##### Find Missing Indexes
+
+```sql
+SELECT * FROM sys.dm_db_missing_index_details;
+```
+**Output**:
+| equality_columns | inequality_columns | included_columns | statement |
+|------------------|--------------------|------------------|----------|
+| Country          | Score              | FirstName, LastName | SELECT ... FROM Customers WHERE Country='USA' AND Score>50 |
+
+**SQL Server says**: "Create this index!
+
+##### Find Duplicate/Redundant Indexes
+
+```sql
+SELECT 
+    tbl.name AS TableName,
+    col.name AS ColumnName,
+    STRING_AGG(idx.name, ', ') AS DuplicateIndexes
+FROM sys.indexes idx
+JOIN sys.tables tbl ON idx.object_id = tbl.object_id
+JOIN sys.index_columns ic ON idx.object_id = ic.object_id AND idx.index_id = ic.index_id
+JOIN sys.columns col ON ic.object_id = col.object_id AND ic.column_id = col.column_id
+WHERE ic.is_included_column = 0
+GROUP BY tbl.name, col.name
+HAVING COUNT(*) > 1;
+```
+**Result**: Two indexes on same column → **remove one!**
+
+### Statistics: The Hidden Optimizer
+
+> **Statistics** = data distribution info used by Query Optimizer.
+
+```sql
+-- View statistics
+SELECT 
+    SCHEMA_NAME(t.schema_id) AS SchemaName,
+    t.name AS TableName,
+    s.name AS StatName,
+    sp.last_updated,
+    sp.rows,
+    sp.modification_counter
+FROM sys.stats s
+JOIN sys.tables t ON s.object_id = t.object_id
+CROSS APPLY sys.dm_db_stats_properties(s.object_id, s.stats_id) sp
+ORDER BY sp.modification_counter DESC;
+```
+
+**Update Stats**:
+```sql
+-- Specific
+UPDATE STATISTICS Sales.DBCustomers;
+
+-- All in DB
+EXEC sp_updatestats;
+```
+
+**When to update?**
+- After large data load
+- When queries slow down
+- `modification_counter` > 20% of rows
+
+### Fragmentation & Maintenance
+
+##### Check Fragmentation
+
+```sql
+SELECT 
+    tbl.name AS TableName,
+    idx.name AS IndexName,
+    s.avg_fragmentation_in_percent,
+    s.page_count
+FROM sys.dm_db_index_physical_stats(DB_ID(), NULL, NULL, NULL, 'LIMITED') s
+JOIN sys.tables tbl ON s.object_id = tbl.object_id
+JOIN sys.indexes idx ON s.object_id = idx.object_id AND s.index_id = idx.index_id
+WHERE s.avg_fragmentation_in_percent > 10
+ORDER BY s.avg_fragmentation_in_percent DESC;
+```
+
+| Fragmentation | Action |
+|---------------|--------|
+| < 10%         | Do nothing |
+| 10% – 30%     | `REORGANIZE` |
+| > 30%         | `REBUILD` |
+
+##### Fix Fragmentation
+
+```sql
+-- Low fragmentation
+ALTER INDEX idx_customers_country ON Sales.Customers REORGANIZE;
+
+-- High fragmentation
+ALTER INDEX idx_customers_country ON Sales.Customers REBUILD;
+```
+
+#### Real-World Query Example
+
+```sql
+SELECT
+    fs.SalesOrderNumber,
+    dp.EnglishProductName,
+    dp.Color
+FROM FactInternetSales fs
+INNER JOIN DimProduct dp ON fs.ProductKey = dp.ProductKey
+WHERE dp.Color = 'Black'
+  AND fs.OrderDateKey BETWEEN 20101229 AND 20101231;
+```
+
+**Without index** → Full scan  
+**With index on `Color`, `OrderDateKey`** → **Index seek** → 100x faster!
+
+#### Best Practices & Pro Tips
+
+| **Do** | **Don't** |
+|------|---------|
+| Index **WHERE**, **JOIN**, **ORDER BY** columns | Index every column |
+| Use **filtered indexes** for sparse data | Ignore `sys.dm_db_index_usage_stats` |
+| Update stats after bulk load | Rebuild indexes daily |
+| Drop **unused indexes** | Create duplicate indexes |
+| Use `INCLUDE` for covering | Forget `SET STATISTICS IO ON` |
+
+```sql
+-- Covering index (no key lookup!)
+CREATE NONCLUSTERED INDEX idx_Covering_Color
+ON DimProduct (Color)
+INCLUDE (EnglishProductName);
+```
+
+### Scalability: Table Partitioning
+
+#### What is Table Partitioning?
+
+> **Table Partitioning** is the process of **splitting a large table into smaller, more manageable pieces** called **partitions**, while still allowing the table to be queried as a single logical unit.
+> Think of it like **dividing a huge filing cabinet into labeled drawers** — easier to manage, faster to search.
+
+#### Why Use Partitioning?
+
+| Problem | Solved by Partitioning |
+|-------|-----------------------|
+| Large tables (> millions of rows) | Faster queries |
+| Historical data | Archive old data |
+| Maintenance (backup, index rebuild) | Do it per partition |
+| Performance degradation | Isolate hot/cold data |
+
+#### Advantages & Disadvantages
+
+| **Advantages** | **Disadvantages** |
+|----------------|-------------------|
+| Faster **queries** on partitions | Complex setup |
+| **Parallel operations** | Requires **Enterprise Edition** |
+| **Sliding window** archiving | Not all queries benefit |
+| Better **manageability** | Extra storage planning |
+
+> **Note**: Full partitioning features require **SQL Server Enterprise** or **Developer Edition**.
+
+#### Partitioning Concepts
+
+| Component | Purpose |
+|---------|--------|
+| **Partition Function** | Defines **boundaries** (e.g., by year) |
+| **Partition Scheme** | Maps boundaries to **filegroups** |
+| **Filegroups** | Physical storage containers |
+| **Files (.ndf)** | Actual data files on disk |
+
+### Partition Function
+
+```sql
+CREATE PARTITION FUNCTION PartitionByYear (DATE)
+AS RANGE LEFT FOR VALUES ('2023-12-31', '2024-12-31', '2025-12-31');
+```
+
+**Explanation**:
+- `RANGE LEFT`: Values **<= boundary** go into that partition.
+- Boundaries: `2023`, `2024`, `2025` → creates **4 partitions**:
+  1. `<= 2023-12-31`
+  2. `2024-01-01 to 2024-12-31`
+  3. `2025-01-01 to 2025-12-31`
+  4. `> 2025-12-31`
+
+### Filegroups & Files
+
+```sql
+-- Create filegroups
+ALTER DATABASE SalesDB ADD FILEGROUP FG_2023;
+ALTER DATABASE SalesDB ADD FILEGROUP FG_2024;
+ALTER DATABASE SalesDB ADD FILEGROUP FG_2025;
+ALTER DATABASE SalesDB ADD FILEGROUP FG_2026;
+
+-- Add physical files
+ALTER DATABASE SalesDB ADD FILE
+(NAME = 'P_2023', FILENAME = 'C:\...\P_2023.ndf') TO FILEGROUP FG_2023;
+-- Repeat for others...
+```
+
+**Query Filegroups**:
+```sql
+SELECT 
+    fg.name AS FileGroup,
+    mf.name AS LogicalFile,
+    mf.physical_name,
+    mf.size / 128.0 AS SizeMB
+FROM sys.filegroups fg
+JOIN sys.master_files mf ON fg.data_space_id = mf.data_space_id
+WHERE mf.database_id = DB_ID('SalesDB');
+```
+### Partition Scheme
+
+```sql
+CREATE PARTITION SCHEME SchemePartitionByYear
+AS PARTITION PartitionByYear
+TO (FG_2023, FG_2024, FG_2025, FG_2026);
+```
+
+**Maps**:
+- Partition 1 → `FG_2023`
+- Partition 2 → `FG_2024`
+- etc.
+
+### Create Partitioned Table
+
+```sql
+CREATE TABLE Sales.Order_partioned (
+    OrderId INT,
+    OrderDate DATE,
+    Sales INT
+) ON SchemePartitionByYear (OrderDate);
+```
+> The **partitioning column** (`OrderDate`) **must be part of the table**.
+
+### Insert & Query Data
+
+```sql
+INSERT INTO Sales.Order_partioned VALUES 
+(1, '2023-05-15', 100),
+(2, '2024-05-15', 200),
+(3, '2026-01-01', 300);
+```
+
+```sql
+SELECT * FROM Sales.Order_partioned;
+```
+
+### Verify Partitioning
+```sql
+SELECT 
+    p.partition_number AS Partition,
+    f.name AS FileGroup,
+    p.rows AS RowCount
+FROM sys.partitions p
+JOIN sys.destination_data_spaces dds ON p.partition_number = dds.destination_id
+JOIN sys.filegroups f ON dds.data_space_id = f.data_space_id
+WHERE OBJECT_NAME(p.object_id) = 'Order_partioned'
+ORDER BY p.partition_number;
+```
+
+**Sample Output**:
+| Partition | FileGroup | RowCount |
+|---------|----------|--------|
+| 1       | FG_2023  | 1      |
+| 2       | FG_2024  | 1      |
+| 4       | FG_2026  | 1      |
+
+
+### Partition Maintenance
+
+#### Switch Out (Archive)
+```sql
+-- Create staging table
+CREATE TABLE Sales.Orders_2023_Archive (
+    OrderId INT, OrderDate DATE, Sales INT
+) ON FG_Archive;
+
+-- Switch partition 1 to archive
+ALTER TABLE Sales.Order_partioned 
+SWITCH PARTITION 1 TO Sales.Orders_2023_Archive;
+```
+
+#### Merge / Split
+```sql
+-- Add new boundary
+ALTER PARTITION FUNCTION PartitionByYear() 
+MERGE RANGE ('2023-12-31');
+
+-- Split for new year
+ALTER PARTITION FUNCTION PartitionByYear() 
+SPLIT RANGE ('2026-12-31');
+```
+
+#### Best Practices & Tips
+
+| **Do** | **Don't** |
+|------|---------|
+| Partition on **date** or **natural key** | Partition on random columns |
+| Use **sliding window** pattern | Forget filegroup planning |
+| Align **indexes** with partition | Use in small tables |
+| Test **partition elimination** | Assume all queries benefit |
+
+```sql
+-- Check if partition elimination works
+SET STATISTICS IO ON;
+SELECT * FROM Sales.Order_partioned 
+WHERE OrderDate BETWEEN '2024-01-01' AND '2024-12-31';
+-- Should scan only FG_2024
+```
+<img width="678" height="427" alt="image" src="https://github.com/user-attachments/assets/1d02a5c2-043e-4a7a-b94c-7a5c0babfcfc" />
+
+## Advanced Queries: Subqueries & Metadata
+
+#### What is Metadata?
+> **Metadata** = **Data about data**  
+> Information about tables, columns, indexes, constraints, etc.
+
+```sql
+-- List all tables
+SELECT DISTINCT TABLE_NAME 
+FROM INFORMATION_SCHEMA.COLUMNS;
+```
+
+**`INFORMATION_SCHEMA`** = ANSI-standard views for metadata.
+
+#### Subqueries: Query Inside Query
+> A **subquery** is a `SELECT` statement **nested inside** another query.
+
+#### Types of Subqueries
+
+| Type | Returns | Use Case |
+|------|--------|--------|
+| **Scalar** | 1 row, 1 column | `WHERE`, `SELECT` |
+| **Row** | 1 row, multiple columns | Rare |
+| **Table (Derived)** | Multiple rows | `FROM`, `JOIN` |
+
+### Subquery Locations
+
+#### SELECT Clause
+
+```sql
+SELECT
+    ProductID,
+    Product,
+    Price,
+    (SELECT COUNT(*) FROM Sales.Orders) AS TotalOrders
+FROM Sales.Products;
+```
+
+**Explanation**:
+- Scalar subquery → returns **one value**.
+- Same for **all rows**.
+
+#### FROM Clause (Derived Table)
+
+```sql
+-- Rank customers by total sales
+SELECT *,
+       RANK() OVER(ORDER BY TotalSales DESC) AS SalesRank
+FROM (
+    SELECT CustomerID, SUM(Sales) AS TotalSales
+    FROM Sales.Orders
+    GROUP BY CustomerID
+) t;
+```
+
+**Explanation**:
+- Inner query → **derived table** `t`
+- Outer query → uses it like a real table
+
+#### WHERE Clause
+
+```sql
+-- Products > average price
+SELECT *
+FROM Sales.Products
+WHERE Price > (
+    SELECT AVG(Price) FROM Sales.Products
+);
+```
+
+**Explanation**:
+- Scalar subquery in `WHERE`
+- **Non-correlated** (runs once)
+
+#### JOIN Clause
+
+```sql
+SELECT 
+    c.*,
+    ISNULL(o.TotalOrders, 0) AS TotalOrders
+FROM Sales.Customers c
+LEFT JOIN (
+    SELECT CustomerID, COUNT(*) AS TotalOrders
+    FROM Sales.Orders
+    GROUP BY CustomerID
+) o ON c.CustomerID = o.CustomerID;
+```
+
+**Explanation**:
+- Subquery in `JOIN` → acts like a **virtual view**
+
+### Correlated vs Non-Correlated
+
+| Type | Definition | Performance |
+|------|-----------|-----------|
+| **Non-Correlated** | Runs **once** | Faster |
+| **Correlated** | Runs **per outer row** | Slower |
+
+```sql
+-- Correlated: Uses outer table reference
+SELECT *,
+       (SELECT COUNT(*) FROM Sales.Orders o WHERE o.CustomerID = c.CustomerID) AS OrderCount
+FROM Sales.Customers c;
+```
+
+### Operators: IN, EXISTS, ANY, ALL
+
+#### IN
+
+```sql
+-- Orders by German customers
+SELECT * FROM Sales.Orders
+WHERE CustomerID IN (
+    SELECT CustomerID FROM Sales.Customers WHERE Country = 'Germany'
+);
+```
+
+#### EXISTS (Recommended for performance)
+
+```sql
+SELECT * FROM Sales.Orders o
+WHERE EXISTS (
+    SELECT 1 FROM Sales.Customers c
+    WHERE c.Country = 'Germany' AND o.CustomerID = c.CustomerID
+);
+```
+
+**Why `EXISTS` is better**:
+- Stops at **first match**
+- Works with `NULL`s safely
+
+#### ANY & ALL
+
+```sql
+-- Female employees earning > ANY male
+SELECT EmployeeID, FirstName, Salary
+FROM Sales.Employees
+WHERE Gender = 'F'
+  AND Salary > ANY (SELECT Salary FROM Sales.Employees WHERE Gender = 'M');
+```
+
+```sql
+-- > ALL = greater than the highest male salary
+AND Salary > ALL (SELECT Salary FROM Sales.Employees WHERE Gender = 'M')
+```
+
+### Practical Examples
+
+#### 1. Products with Price > Average
+
+```sql
+SELECT * FROM (
+    SELECT ProductID, Price, AVG(Price) OVER() AS AvgPrice
+    FROM Sales.Products
+) t
+WHERE Price > AvgPrice;
+```
+> Uses **window function** — often better than subquery.
+
+#### 2. Customer Order Count (Correlated)
+
+```sql
+SELECT 
+    c.*,
+    (SELECT COUNT(1) FROM Sales.Orders o WHERE o.CustomerID = c.CustomerID) AS TotalOrders
+FROM Sales.Customers c;
+```
+
+#### 3. Top Customer per Country
+
+```sql
+SELECT * FROM (
+    SELECT 
+        c.CustomerID, c.Country, SUM(o.Sales) AS TotalSales,
+        ROW_NUMBER() OVER(PARTITION BY c.Country ORDER BY SUM(o.Sales) DESC) AS rn
+    FROM Sales.Customers c
+    JOIN Sales.Orders o ON c.CustomerID = o.CustomerID
+    GROUP BY c.CustomerID, c.Country
+) t
+WHERE rn = 1;
+```
+
+### Best Practices & Performance
+
+| **Do** | **Don't** |
+|------|---------|
+| Prefer `EXISTS` over `IN` | Use correlated in large tables |
+| Use `JOIN` instead of subquery when possible | Nest too deeply |
+| Use CTEs for readability | Forget aliases |
+| Test with `SET STATISTICS IO ON` | Assume subquery = slow |
+
+```sql
+-- Better: Use JOIN
+SELECT c.*, COUNT(o.OrderID)
+FROM Sales.Customers c
+LEFT JOIN Sales.Orders o ON c.CustomerID = o.CustomerID
+GROUP BY c.CustomerID, ...
+```
+
+# SQL Performance Mastery: 30 Golden Tips to Supercharge Your Queries
+
+> **"Premature optimization is the root of all evil."** — Donald Knuth  
+> **BUT** — *Smart, intentional optimization is the hallmark of a professional.*
+
+## Table of Contents
+
+| # | Tip | Category |
+|---|-----|--------|
+| 1 | Select Only What You Need | Query Design |
+| 2 | Avoid Unnecessary `DISTINCT` & `ORDER BY` | Query Design |
+| 3 | Limit Rows for Exploration | Debugging |
+| 4 | Index Frequently Filtered Columns | Indexing |
+| 5 | Avoid Functions on Columns | Sargability |
+| 6 | Avoid Leading Wildcards | Sargability |
+| 7 | Use `IN` Instead of `OR` | Query Logic |
+| 8 | Prefer `INNER JOIN` | Join Performance |
+| 9 | Use Explicit `JOIN` Syntax | Readability |
+| 10| Index `ON` Clause Columns | Join Performance |
+| 11| Filter Before Joining | Join Optimization |
+| 12| Aggregate Before Joining | Aggregation |
+| 13| Use `UNION` Instead of `OR` in Joins | Join Logic |
+| 14| Use Join Hints When Needed | Advanced |
+| 15| Use `UNION ALL` (Not `UNION`) | Set Operations |
+| 16| `UNION ALL` + `DISTINCT` > `UNION` | Set Operations |
+| 17| Use Columnstore for Aggregations | Indexing |
+| 18| Pre-Aggregate for Reporting | Materialization |
+| 19| Prefer `EXISTS` Over `IN` | Subqueries |
+| 20| Avoid Redundant Logic | Query Logic |
+| 21| Use Proper Data Types | Schema Design |
+| 22| Use `NOT NULL` Where Possible | Schema Design |
+| 23| Every Table Needs a Clustered PK | Schema Design |
+| 24| Index Foreign Keys | Indexing |
+| 25| Avoid Over-Indexing | Indexing |
+| 26| Drop Unused Indexes | Maintenance |
+| 27| Update Statistics Regularly | Maintenance |
+| 28| Rebuild/Reorganize Indexes | Maintenance |
+| 29| Partition Large Fact Tables | Scalability |
+| 30| Combine Partitioning + Columnstore | Ultimate Performance |
+
+## 30 Performance Tips (With Code!)
+
+### 1. **Select Only What You Need**
+
+```sql
+-- Bad: Select everything
+SELECT * FROM Sales.Orders
+
+-- Good: Select only needed columns
+SELECT OrderID, Sales, OrderDate FROM Sales.Orders
+```
+> **Why?** Reduces I/O, memory, and network usage.
+
+### 2. **Avoid Unnecessary `DISTINCT` & `ORDER BY`**
+
+```sql
+-- Bad
+SELECT DISTINCT CustomerID FROM Sales.Orders ORDER BY OrderDate
+
+-- Good (if order doesn't matter)
+SELECT CustomerID FROM Sales.Orders
+```
+> **Tip**: Only use `DISTINCT` when duplicates are possible and unwanted.
+
+### 3. **Limit Rows for Exploration**
+
+```sql
+-- Bad
+SELECT OrderID, Sales FROM Sales.Orders
+
+-- Good
+SELECT TOP 10 OrderID, Sales FROM Sales.Orders
+```
+
+> **Pro Tip**: Use `TOP 100` or `SET ROWCOUNT 100` during testing.
+
+### 4. **Index Frequently Filtered Columns**
+
+```sql
+-- Query
+SELECT * FROM Sales.Orders WHERE OrderStatus = 'Delivered'
+
+-- Create Index
+CREATE NONCLUSTERED INDEX IDX_Orders_OrderStatus 
+ON Sales.Orders(OrderStatus)
+```
+> **Result**: Index seek instead of scan.
+
+### 5. **Avoid Functions on Columns (Sargability!)**
+
+```sql
+-- Bad (non-sargable)
+SELECT * FROM Sales.Orders WHERE YEAR(OrderDate) = 2025
+
+-- Good (sargable)
+SELECT * FROM Sales.Orders 
+WHERE OrderDate BETWEEN '2025-01-01' AND '2025-12-31'
+
+> **Sargable** = Search ARGument ABLE → uses index.
+
+### 6. **Avoid Leading Wildcards**
+
+```sql
+-- Bad (full scan)
+SELECT * FROM Sales.Customers WHERE LastName LIKE '%Gold%'
+
+-- Good (index seek)
+SELECT * FROM Sales.Customers WHERE LastName LIKE 'Gold%'
+```
+
+### 7. **Use `IN` Instead of Multiple `OR`**
+
+```sql
+-- Bad
+WHERE CustomerID = 1 OR CustomerID = 2 OR CustomerID = 3
+
+-- Good
+WHERE CustomerID IN (1, 2, 3)
+```
+
+### 8. **Prefer `INNER JOIN`**
+
+```sql
+-- Fastest
+INNER JOIN
+
+-- Slower
+LEFT/RIGHT JOIN
+
+-- Slowest
+FULL OUTER JOIN
+```
+> **Rule**: Use the least inclusive join that satisfies logic.
+
+### 9. **Use Explicit `JOIN` Syntax**
+
+```sql
+-- Bad (old style)
+SELECT o.OrderID, c.FirstName
+FROM Sales.Customers c, Sales.Orders o
+WHERE c.CustomerID = o.CustomerID
+
+-- Good
+SELECT o.OrderID, c.FirstName
+FROM Sales.Customers c
+INNER JOIN Sales.Orders o ON c.CustomerID = o.CustomerID
+```
+
+### 10. **Index `ON` Clause Columns**
+
+```sql
+-- Index both sides!
+CREATE NONCLUSTERED INDEX IX_Orders_CustomerID ON Sales.Orders(CustomerID)
+CREATE NONCLUSTERED INDEX IX_Customers_CustomerID ON Sales.Customers(CustomerID)
+```
+
+### 11. **Filter Before Joining**
+
+```sql
+-- Best: Filter in subquery
+SELECT c.FirstName, o.OrderID
+FROM Sales.Customers c
+INNER JOIN (
+    SELECT OrderID, CustomerID 
+    FROM Sales.Orders 
+    WHERE OrderStatus = 'Delivered'
+) o ON c.CustomerID = o.CustomerID
+```
+
+### 12. **Aggregate Before Joining**
+
+```sql
+-- Best
+SELECT c.FirstName, o.OrderCount
+FROM Sales.Customers c
+INNER JOIN (
+    SELECT CustomerID, COUNT(*) AS OrderCount
+    FROM Sales.Orders
+    GROUP BY CustomerID
+) o ON c.CustomerID = o.CustomerID
+```
+> **Avoid**: Correlated subqueries!
+
+### 13. **Use `UNION` Instead of `OR` in Joins**
+
+```sql
+-- Bad
+ON c.CustomerID = o.CustomerID OR c.CustomerID = o.SalesPersonID
+
+-- Good
+SELECT ... FROM ... JOIN ... ON c.CustomerID = o.CustomerID
+UNION
+SELECT ... FROM ... JOIN ... ON c.CustomerID = o.SalesPersonID
+```
+
+### 14. **Use Join Hints (When Needed)**
+
+```sql
+OPTION (HASH JOIN)  -- For large + small tables
+OPTION (MERGE JOIN) -- For sorted data
+OPTION (LOOP JOIN)  -- For small tables
+```
+
+### 15. **Use `UNION ALL` (Not `UNION`)**
+
+```sql
+-- Fast (allows duplicates)
+SELECT CustomerID FROM Sales.Orders
+UNION ALL
+SELECT CustomerID FROM Sales.OrdersArchive
+```
+
+### 16. **`UNION ALL` + `DISTINCT` > `UNION`**
+
+```sql
+-- Need unique? Do this:
+SELECT DISTINCT CustomerID FROM (
+    SELECT CustomerID FROM Sales.Orders
+    UNION ALL
+    SELECT CustomerID FROM Sales.OrdersArchive
+) t
+```
+
+### 17. **Columnstore for Aggregations**
+
+```sql
+CREATE CLUSTERED COLUMNSTORE INDEX IDX_Orders_CS ON Sales.Orders
+```
+> **100x faster** for `SUM`, `COUNT`, `GROUP BY` on large tables.
+
+### 18. **Pre-Aggregate for Reporting**
+
+```sql
+SELECT YEAR(OrderDate), SUM(Sales)
+INTO Sales.SalesSummary_Yearly
+FROM Sales.Orders
+GROUP BY YEAR(OrderDate)
+```
+### 19. **Prefer `EXISTS` Over `IN`**
+
+```sql
+-- Best for large tables
+WHERE EXISTS (
+    SELECT 1 FROM Sales.Customers c
+    WHERE c.CustomerID = o.CustomerID AND c.Country = 'USA'
+)
+```
+> Stops at **first match**, no duplication.
+
+### 20. **Avoid Redundant Logic**
+
+```sql
+-- Good: Use window function
+SELECT *,
+    CASE 
+        WHEN Salary > AVG(Salary) OVER() THEN 'Above Average'
+        ELSE 'Below Average'
+    END AS Status
+FROM Sales.Employees
+```
+
+### 21–23. **Schema Design Tips**
+
+```sql
+CREATE TABLE CustomersInfo (
+    CustomerID INT PRIMARY KEY CLUSTERED,
+    FirstName VARCHAR(50) NOT NULL,
+    Country VARCHAR(50) NOT NULL,
+    BirthDate DATE,
+    EmployeeID INT,
+    CONSTRAINT FK_Employee FOREIGN KEY (EmployeeID) 
+        REFERENCES Sales.Employees(EmployeeID)
+)
+```
+
+> **Every table needs a clustered PK!**
+
+### 24–30. **Indexing & Maintenance**
+
+| Tip | Action |
+|-----|--------|
+| 24 | Index **foreign keys** |
+| 25 | Avoid **over-indexing** |
+| 26 | Drop **unused indexes** |
+| 27 | `UPDATE STATISTICS` weekly |
+| 28 | `REBUILD`/`REORGANIZE` indexes |
+| 29 | **Partition** fact tables |
+| 30 | **Columnstore + Partitioning** = |
+
+## Golden Rule
+
+> **Always check the execution plan!**
+
+```sql
+SET STATISTICS IO ON;
+SET STATISTICS TIME ON;
+-- Run query
+-- Check: Logical reads, CPU time, duration
+```
+
+> **No improvement in plan?** → **Prioritize readability.**
+
+## Bonus: Query Performance Checklist
+
+| Check | Done? |
+|------|-------|
+| Select only needed columns | [ ] |
+| Avoid `*` in production | [ ] |
+| Use `TOP` when testing | [ ] |
+| Index `WHERE`/`JOIN` columns | [ ] |
+| Avoid functions on columns | [ ] |
+| Use `EXISTS` not `IN` | [ ] |
+| Filter early | [ ] |
+| Check execution plan | [ ] |
+
+
+## Resources
+
+- [SQL Server Execution Plans](https://www.red-gate.com/simple-talk/sql/performance/execution-plan-basics/)
+- [Sargability Guide](https://www.sqlshack.com/sargable-queries/)
+- [Columnstore Indexes](https://learn.microsoft.com/en-us/sql/relational-databases/indexes/columnstore-indexes-overview)
+
+
+## Contribute
+
+Found a new tip?  
+→ Open a PR! Let's make SQL **fast and beautiful**.
+
+**Made with passion for performance**  
+*Your queries deserve to fly.*
+
 
 ## How to Use This Repo
 
